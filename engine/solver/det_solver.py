@@ -21,6 +21,49 @@ from ..optim.lr_scheduler import FlatCosineLRScheduler
 
 
 class DetSolver(BaseSolver):
+    @staticmethod
+    def _per_class_ap50_from_coco(coco_evaluator, hard_class_names=None):
+        if coco_evaluator is None or "bbox" not in getattr(coco_evaluator, "coco_eval", {}):
+            return {}, None
+        coco_eval = coco_evaluator.coco_eval["bbox"]
+        if coco_eval.eval is None or "precision" not in coco_eval.eval:
+            return {}, None
+
+        precision = coco_eval.eval["precision"]
+        params = coco_eval.params
+        try:
+            iou_idx = int(min(range(len(params.iouThrs)), key=lambda i: abs(float(params.iouThrs[i]) - 0.5)))
+            area_idx = list(params.areaRngLbl).index("all") if "all" in params.areaRngLbl else 0
+            maxdet_idx = len(params.maxDets) - 1
+        except Exception:
+            return {}, None
+
+        cat_id_to_name = {
+            int(cat_id): coco_eval.cocoGt.cats[int(cat_id)].get("name", str(cat_id))
+            for cat_id in params.catIds
+            if int(cat_id) in coco_eval.cocoGt.cats
+        }
+        per_class = {}
+        for k, cat_id in enumerate(params.catIds):
+            values = precision[iou_idx, :, k, area_idx, maxdet_idx]
+            values = values[values > -1]
+            if values.size:
+                per_class[cat_id_to_name.get(int(cat_id), str(cat_id))] = float(values.mean())
+
+        hard_names = list(hard_class_names or [])
+        hard_values = [per_class[name] for name in hard_names if name in per_class]
+        hard_mean = float(sum(hard_values) / len(hard_values)) if hard_values else None
+        return per_class, hard_mean
+
+    @staticmethod
+    def _is_better_v2_1(current_ap50, current_hard, best_ap50, best_hard, tie_threshold):
+        if best_ap50 is None:
+            return True
+        if current_ap50 > best_ap50 + tie_threshold:
+            return True
+        if abs(current_ap50 - best_ap50) <= tie_threshold:
+            return (current_hard if current_hard is not None else -1.0) > (best_hard if best_hard is not None else -1.0)
+        return False
 
     def fit(self, ):
         self.train()
@@ -42,6 +85,10 @@ class DetSolver(BaseSolver):
 
         top1 = 0
         best_stat = {'epoch': -1, }
+        best_v2_1 = {'epoch': -1, 'ap50': None, 'hard_class_mean_ap50': None}
+        best_select_metric = getattr(args, 'best_select_metric', None)
+        hard_class_names = getattr(args, 'hard_class_names', [])
+        hard_tie_threshold = float(getattr(args, 'hard_class_tie_threshold', 0.003))
         # evaluate again before resume training
         if self.last_epoch > 0:
             module = self.ema.module if self.ema else self.model
@@ -157,6 +204,7 @@ class DetSolver(BaseSolver):
                 self.evaluator,
                 self.device
             )
+            per_class_ap50, hard_class_mean_ap50 = self._per_class_ap50_from_coco(coco_evaluator, hard_class_names)
 
             # TODO
             for k in test_stats:
@@ -198,10 +246,37 @@ class DetSolver(BaseSolver):
                     self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
                     print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
 
+            if (
+                best_select_metric == 'ap50_hard_tie'
+                and 'coco_eval_bbox' in test_stats
+                and len(test_stats['coco_eval_bbox']) > 1
+            ):
+                current_ap50 = float(test_stats['coco_eval_bbox'][1])
+                if self._is_better_v2_1(
+                    current_ap50,
+                    hard_class_mean_ap50,
+                    best_v2_1['ap50'],
+                    best_v2_1['hard_class_mean_ap50'],
+                    hard_tie_threshold,
+                ):
+                    best_v2_1 = {
+                        'epoch': epoch,
+                        'ap50': current_ap50,
+                        'hard_class_mean_ap50': hard_class_mean_ap50,
+                        'per_class_ap50': per_class_ap50,
+                    }
+                    if self.output_dir:
+                        dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_v2_1.pth')
+                        if dist_utils.is_main_process():
+                            with (self.output_dir / 'best_v2_1.json').open('w') as f:
+                                json.dump(best_v2_1, f, indent=2, ensure_ascii=False)
+                    print(f"best_v2_1: {best_v2_1}")
 
             log_stats = {
                 **{f'train_{k}': v for k, v in train_stats.items()},
                 **{f'test_{k}': v for k, v in test_stats.items()},
+                'test_per_class_ap50': per_class_ap50,
+                'test_hard_class_mean_ap50': hard_class_mean_ap50,
                 'epoch': epoch,
                 'n_parameters': n_parameters
             }

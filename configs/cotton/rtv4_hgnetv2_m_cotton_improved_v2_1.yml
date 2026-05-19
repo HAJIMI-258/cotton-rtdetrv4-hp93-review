@@ -1,0 +1,226 @@
+
+__include__: [
+  '../dataset/custom_detection.yml',
+  '../runtime.yml',
+  '../base/dataloader.yml',
+  '../base/optimizer.yml',
+  '../base/dfine_hgnetv2.yml',
+  '../base/rtv4.yml'
+]
+
+# High-precision single RTX 3090 candidate.
+# Goal: first produce a strong final model, then run ablations around it.
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_improved_v2_1
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_improved_v2_1/tensorboard
+
+num_classes: 21
+remap_mscoco_category: False
+
+eval_spatial_size: [768, 768]
+
+teacher_model:
+  type: "DINOv3TeacherModel"
+  dinov3_repo_path: dinov3/
+  dinov3_weights_path: pretrain/dinov3_vitb16_pretrain_lvd1689m.pth
+  dinov3_model_type: "dinov3_vitb16"
+  patch_size: 16
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+RTv4:
+  backbone: HGNetv2
+  encoder: HybridEncoder
+  decoder: DFINETransformer
+
+HGNetv2:
+  name: 'B2'
+  return_idx: [1, 2, 3]
+  freeze_at: -1
+  freeze_norm: False
+  use_lab: True
+  pretrained: True
+  local_model_dir: ./pretrain/hgnetv2/
+
+HybridEncoder:
+  in_channels: [384, 768, 1536]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  depth_mult: 0.67
+  expansion: 0.5
+  use_encoder_idx: [2]
+  num_encoder_layers: 1
+  nhead: 8
+  dim_feedforward: 1024
+  dropout: 0.
+  enc_act: 'gelu'
+  act: 'silu'
+  distill_teacher_dim: 768
+
+  # Keep only high-probability modules. Avoid the previous all-module pile-up.
+  ifpn_upsample_mode: bilinear
+  edge_enhance: False
+  prewitt_franklin_enhance: True
+  prewitt_franklin_alpha: 0.12
+  prewitt_franklin_local_refine: True
+  prewitt_franklin_local_kernel_size: 7
+  prewitt_franklin_edge_consistency: True
+  edge_threshold_ratio: 0.2
+
+  small_lesion_enhance: True
+  small_lesion_alpha: 0.10
+  output_refine: True
+  output_refine_alpha: 0.08
+
+  carafe_upsample: True
+  carafe_compressed_channels: 32
+  carafe_kernel_size: 3
+  bifpn_fusion: True
+
+  # Use light attention only; CBAM+LSK+RepVGG+PConv together often overfits small custom datasets.
+  coord_attention_exact: True
+  coordinate_attention_alpha: 0.10
+  eca_attention: True
+  eca_alpha: 0.08
+  cbam_attention: False
+  lsk_attention: False
+  fasternet_pconv: False
+  repvgg_enhance: False
+  gather_distribute: False
+
+  # Let added modules actually learn, but keep the residual contribution bounded.
+  safe_module_init_scale: 0.015
+  safe_module_trainable_scale: True
+  safe_module_max_scale: 0.10
+
+best_select_metric: ap50_hard_tie
+hard_class_names: ['leaf_reddening', 'yellowish_leaf', 'damaged_cotton_boll']
+hard_class_tie_threshold: 0.003
+
+DFINETransformer:
+  feat_channels: [256, 256, 256]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  num_levels: 3
+  num_layers: 4
+  eval_idx: -1
+  num_queries: 300
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  reg_max: 32
+  reg_scale: 4
+  layer_scale: 1
+  num_points: [3, 6, 3]
+  cross_attn_method: default
+  query_select_method: default
+  activation: silu
+  mlp_act: silu
+
+PostProcessor:
+  num_top_queries: 300
+
+# Single 3090: real batch 8, accumulated 2 -> effective batch 16.
+# If CUDA OOM, set total_batch_size to 4 and accumulation_steps to 4.
+accumulation_steps: 2
+
+epoches: 120
+flat_epoch: 70
+no_aug_epoch: 30
+checkpoint_freq: 1
+print_freq: 50
+use_amp: True
+use_ema: True
+sync_bn: False
+find_unused_parameters: False
+clip_max_norm: 0.1
+
+ema:
+  type: ModelEMA
+  decay: 0.9998
+  warmups: 1000
+  start: 0
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.00003
+    -
+      params: '^(?=.*backbone)(?=.*norm|bn).*$'
+      lr: 0.00003
+      weight_decay: 0.
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$'
+      weight_decay: 0.
+  lr: 0.00014
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+RTv4Criterion:
+  weight_dict: {loss_mal: 1.1, loss_bbox: 4, loss_giou: 1.5, loss_nwd: 0.25, loss_fgl: 0.10, loss_ddf: 1.0, loss_distill: 1.5, loss_edge_consistency: 0.02}
+  losses: ['mal', 'boxes', 'local', 'distill', 'edge_consistency']
+  gamma: 1.5
+  reg_max: 32
+  nwd_normalizer: 1.0
+  nwd_eps: 1.0e-7
+  hdps_class_union: False
+  distill_adaptive_params:
+    enabled: True
+    foreground_focus: True
+    fg_weight: 2.0
+    bg_weight: 0.01
+    box_scale: 2.2
+    min_fg_pixels: 6
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {cost_class: 2.5, cost_bbox: 4, cost_giou: 1.5}
+    alpha: 0.25
+    gamma: 2.0
+
+train_dataloader:
+  dataset:
+    img_folder: ./data/cotton_rtdetr_dataset_balanced_stratified/images/train
+    ann_file: ./data/cotton_coco_balanced_stratified/annotations/instances_train.json
+    transforms:
+      ops:
+        - {type: HardClassCopyPaste, target_category_names: ['leaf_reddening', 'yellowish_leaf', 'damaged_cotton_boll'], probability: 0.35, max_paste: 2, max_trials: 25, context_ratio: 0.18, scale_range: [0.90, 1.10], max_patch_ratio: 0.48, max_overlap_iou: 0.35, min_box_size: 4, max_epoch: 70}
+        - {type: RandomPhotometricDistort, p: 0.2}
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.15}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [768, 768]}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        name: stop_epoch
+        epoch: [0, 45, 70]
+        ops: ['HardClassCopyPaste', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
+      mosaic_prob: 0.0
+  shuffle: True
+  total_batch_size: 8
+  num_workers: 4
+  drop_last: True
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 768
+    base_size_repeat: 3
+    mixup_prob: 0.0
+    mixup_epochs: [4, 22]
+    stop_epoch: 36
+    ema_restart_decay: 0.9998
+
+val_dataloader:
+  dataset:
+    img_folder: ./data/cotton_rtdetr_dataset_balanced_stratified/images/val
+    ann_file: ./data/cotton_coco_balanced_stratified/annotations/instances_val.json
+    transforms:
+      ops:
+        - {type: Resize, size: [768, 768]}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+  shuffle: False
+  total_batch_size: 16
+  num_workers: 4
+  drop_last: False

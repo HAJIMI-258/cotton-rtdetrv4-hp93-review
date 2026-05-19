@@ -187,6 +187,14 @@ class RTv4Criterion(nn.Module):
         loss_distill = torch.nan_to_num(loss_distill, nan=0.0, posinf=0.0, neginf=0.0)
         return {'loss_distill': loss_distill}
 
+    def loss_edge_consistency(self, outputs, targets, indices, num_boxes, **kwargs):
+        loss = outputs.get('loss_edge_consistency')
+        if loss is None:
+            ref = outputs.get('pred_logits')
+            device = ref.device if torch.is_tensor(ref) else torch.device('cpu')
+            loss = torch.zeros((), device=device)
+        return {'loss_edge_consistency': torch.nan_to_num(loss, nan=0.0, posinf=0.0, neginf=0.0)}
+
 
 
     def _get_distillation_weight_for_epoch(self) -> float:
@@ -397,6 +405,7 @@ class RTv4Criterion(nn.Module):
             'mal': self.loss_labels_mal,
             'local': self.loss_local,
             'distill': self.loss_distillation,  # NEW: Add distillation loss
+            'edge_consistency': self.loss_edge_consistency,
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
@@ -456,6 +465,10 @@ class RTv4Criterion(nn.Module):
                     dynamic_weight = self._get_distillation_weight_for_epoch()
                     l_dict['loss_distill'] = l_dict['loss_distill'] * dynamic_weight
                 losses.update(l_dict)
+            elif loss_name == 'edge_consistency':
+                l_dict = self.get_loss(loss_name, outputs, targets, None, None, **kwargs)
+                l_dict = {k: l_dict[k] * self.weight_dict[k] for k in l_dict if k in self.weight_dict}
+                losses.update(l_dict)
             else:
                 union_losses = ['boxes', 'local'] + (['mal', 'vfl', 'focal'] if self.hdps_class_union else [])
                 use_uni_set = self.use_uni_set and (loss_name in union_losses)
@@ -472,7 +485,7 @@ class RTv4Criterion(nn.Module):
                 if 'local' in self.losses:  # only work for local loss
                     aux_outputs['up'], aux_outputs['reg_scale'] = outputs['up'], outputs['reg_scale']
                 for loss in self.losses:
-                    if loss == 'distill':
+                    if loss in ('distill', 'edge_consistency'):
                         continue
                     # TODO, indices and num_box are different from RT-DETRv2
                     union_losses = ['boxes', 'local'] + (['mal', 'vfl', 'focal'] if self.hdps_class_union else [])
@@ -490,7 +503,7 @@ class RTv4Criterion(nn.Module):
         if 'pre_outputs' in outputs:
             aux_outputs = outputs['pre_outputs']
             for loss in self.losses:
-                if loss == 'distill':
+                if loss in ('distill', 'edge_consistency'):
                     continue
                 # TODO, indices and num_box are different from RT-DETRv2
                 union_losses = ['boxes', 'local'] + (['mal', 'vfl', 'focal'] if self.hdps_class_union else [])
@@ -519,7 +532,7 @@ class RTv4Criterion(nn.Module):
 
             for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
                 for loss in self.losses:
-                    if loss == 'distill':
+                    if loss in ('distill', 'edge_consistency'):
                         continue
                     # TODO, indices and num_box are different from RT-DETRv2
                     union_losses = ['boxes'] + (['mal', 'vfl', 'focal'] if self.hdps_class_union else [])
@@ -546,7 +559,7 @@ class RTv4Criterion(nn.Module):
                     aux_outputs['is_dn'] = True
                     aux_outputs['up'], aux_outputs['reg_scale'] = outputs['up'], outputs['reg_scale']
                 for loss in self.losses:
-                    if loss == 'distill':
+                    if loss in ('distill', 'edge_consistency'):
                         continue
                     meta = self.get_loss_meta_info(loss, aux_outputs, targets, indices_dn)
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices_dn, dn_num_boxes, **meta)
@@ -558,7 +571,7 @@ class RTv4Criterion(nn.Module):
             if 'dn_pre_outputs' in outputs:
                 aux_outputs = outputs['dn_pre_outputs']
                 for loss in self.losses:
-                    if loss == 'distill':
+                    if loss in ('distill', 'edge_consistency'):
                         continue
                     meta = self.get_loss_meta_info(loss, aux_outputs, targets, indices_dn)
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices_dn, dn_num_boxes, **meta)

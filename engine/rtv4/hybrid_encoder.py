@@ -276,12 +276,26 @@ class PrewittFranklinEdgeGuidedEnhance(nn.Module):
     channels.
     """
 
-    def __init__(self, channels, alpha=0.15, threshold_ratio=0.2, kernel_size=7, eps=1e-6):
+    def __init__(
+        self,
+        channels,
+        alpha=0.15,
+        threshold_ratio=0.2,
+        kernel_size=7,
+        local_refine=True,
+        local_refine_kernel_size=7,
+        edge_consistency=False,
+        eps=1e-6,
+        act='silu',
+    ):
         super().__init__()
         if kernel_size != 7:
             raise ValueError("The paper-selected Franklin template size is 7x7.")
+        if local_refine_kernel_size % 2 != 1:
+            raise ValueError("local_refine_kernel_size must be odd.")
         self.alpha = alpha
         self.threshold_ratio = threshold_ratio
+        self.edge_consistency = edge_consistency
         self.eps = eps
         kernel_x = torch.tensor(
             [[-1., 0., 1.],
@@ -295,6 +309,19 @@ class PrewittFranklinEdgeGuidedEnhance(nn.Module):
         self.register_buffer('prewitt_kernel_y', kernel_y, persistent=False)
         self.register_buffer('franklin_kernels', self._build_franklin_kernels(kernel_size), persistent=False)
         self.edge_proj = nn.Conv2d(4, channels, kernel_size=1, bias=True)
+        self.feature_gate = nn.Conv2d(channels, channels, kernel_size=1, bias=True)
+        self.local_refine = nn.Sequential(
+            ConvNormLayer_fuse(
+                channels,
+                channels,
+                local_refine_kernel_size,
+                1,
+                g=channels,
+                act=act,
+            ),
+            ConvNormLayer_fuse(channels, channels, 1, 1, act=act),
+        ) if local_refine else None
+        self.edge_consistency_loss = None
 
     @staticmethod
     def _franklin_phi(order, r):
@@ -411,9 +438,24 @@ class PrewittFranklinEdgeGuidedEnhance(nn.Module):
         k_norm = k / (k.flatten(1).amax(dim=1).view(-1, 1, 1, 1) + self.eps)
 
         edge_features = torch.cat([grad_norm, franklin_edge, l, k_norm], dim=1)
-        edge_features = torch.nan_to_num(edge_features, nan=0.0, posinf=1.0, neginf=0.0).detach()
-        gate = torch.sigmoid(self.edge_proj(edge_features))
-        return x * (1.0 + self.alpha * gate)
+        edge_features = torch.nan_to_num(edge_features, nan=0.0, posinf=1.0, neginf=0.0)
+        edge_prior = (0.65 * franklin_edge + 0.35 * grad_norm).clamp(0.0, 1.0).detach()
+        edge_features = edge_features.detach()
+        gate = torch.sigmoid(self.edge_proj(edge_features) + self.feature_gate(x))
+
+        if self.local_refine is not None:
+            refined = self.local_refine(x)
+            delta = refined - x
+        else:
+            delta = x * gate
+
+        if self.edge_consistency:
+            gate_map = gate.mean(dim=1, keepdim=True)
+            self.edge_consistency_loss = F.smooth_l1_loss(gate_map, edge_prior, reduction='mean')
+        else:
+            self.edge_consistency_loss = None
+
+        return x + self.alpha * gate * delta
 
 
 class SmallLesionCrossScaleEnhance(nn.Module):
@@ -909,6 +951,9 @@ class HybridEncoder(nn.Module):
                  edge_threshold_ratio=0.2,
                  prewitt_franklin_enhance=False,
                  prewitt_franklin_alpha=0.15,
+                 prewitt_franklin_local_refine=True,
+                 prewitt_franklin_local_kernel_size=7,
+                 prewitt_franklin_edge_consistency=False,
                  small_lesion_enhance=False,
                  small_lesion_alpha=0.15,
                  attention_enhance=False,
@@ -962,6 +1007,7 @@ class HybridEncoder(nn.Module):
         self.safe_module_init_scale = safe_module_init_scale
         self.safe_module_trainable_scale = safe_module_trainable_scale
         self.safe_module_max_scale = safe_module_max_scale
+        self._aux_losses = {}
 
         assert len(use_encoder_idx) > 0, "use_encoder_idx must specify at least one encoder output"
         # target AIFI output F5 for distillation
@@ -1053,7 +1099,13 @@ class HybridEncoder(nn.Module):
             hidden_dim, alpha=edge_enhance_alpha, threshold_ratio=edge_threshold_ratio
         ) if edge_enhance else None
         self.prewitt_franklin_enhancer = PrewittFranklinEdgeGuidedEnhance(
-            hidden_dim, alpha=prewitt_franklin_alpha, threshold_ratio=edge_threshold_ratio
+            hidden_dim,
+            alpha=prewitt_franklin_alpha,
+            threshold_ratio=edge_threshold_ratio,
+            local_refine=prewitt_franklin_local_refine,
+            local_refine_kernel_size=prewitt_franklin_local_kernel_size,
+            edge_consistency=prewitt_franklin_edge_consistency,
+            act=act,
         ) if prewitt_franklin_enhance else None
         self.small_lesion_enhancer = SmallLesionCrossScaleEnhance(
             hidden_dim, alpha=small_lesion_alpha, act=act
@@ -1217,6 +1269,7 @@ class HybridEncoder(nn.Module):
 
     def forward(self, feats):
         assert len(feats) == len(self.in_channels)
+        self._aux_losses = {}
         proj_feats = [self.input_proj[i](feat) for i, feat in enumerate(feats)]
 
         distill_student_output = None
@@ -1280,6 +1333,8 @@ class HybridEncoder(nn.Module):
             inner_outs[0] = self._safe_residual(
                 self.prewitt_franklin_enhancer, inner_outs[0], self.prewitt_franklin_scale
             )
+            if self.training and self.prewitt_franklin_enhancer.edge_consistency_loss is not None:
+                self._aux_losses['loss_edge_consistency'] = self.prewitt_franklin_enhancer.edge_consistency_loss
         if self.small_lesion_enhancer is not None:
             inner_outs[0] = self._safe_residual(self.small_lesion_enhancer, inner_outs[0], self.small_lesion_scale)
         if self.high_frequency_enhancer is not None:
@@ -1364,6 +1419,11 @@ class HybridEncoder(nn.Module):
                 for context, scale, out in zip(self.global_contexts, self.global_context_scales, outs)
             ]
 
-        if self.training and distill_student_output is not None:
-            return outs, distill_student_output
+        if self.training:
+            if distill_student_output is not None and self._aux_losses:
+                return outs, distill_student_output, self._aux_losses
+            if distill_student_output is not None:
+                return outs, distill_student_output
+            if self._aux_losses:
+                return outs, self._aux_losses
         return outs
