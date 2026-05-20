@@ -24,7 +24,9 @@ $Args = @(
 
 Write-Host "Starting canonical hp93_v22 fine-tune from $Checkpoint"
 Write-Host "$Python $($Args -join ' ')"
+$ErrorActionPreference = "Continue"
 & $Python @Args 2>&1 | Tee-Object -FilePath $Log
 $ExitCode = $LASTEXITCODE
 "python_exit=$ExitCode" | Tee-Object -FilePath $Log -Append
+$ErrorActionPreference = "Stop"
 exit $ExitCode
