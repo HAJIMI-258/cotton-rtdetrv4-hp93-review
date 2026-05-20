@@ -33,6 +33,10 @@ This repository is a research working copy of RT-DETRv4 with cotton disease and 
   - Hard-class copy-paste plus PF local refinement experiment
 - `configs/cotton/rtv4_hgnetv2_m_cotton_improved_v2_2_finetune.yml`
   - Fine-tune recipe from current improved v1 AP50-best checkpoint
+- `configs/cotton/rtv4_hgnetv2_m_cotton_hp93_v22.yml`
+  - Canonical v2.2 alias used for final training/review
+- `tools/cotton/train_hp93_v22_3090.ps1`
+  - Canonical Windows 3090 launcher for v2.2 fine-tuning
 
 ## Current Training Context
 
@@ -57,6 +61,16 @@ This repository is a research working copy of RT-DETRv4 with cotton disease and 
 - tightening safe module scale to `0.005 -> max 0.02`;
 - using conservative hard-class copy-paste;
 - using AP50 with hard-class AP50 tie-break for checkpoint saving.
+
+Canonical v2.2 launch command on the original Windows 3090:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\cotton\train_hp93_v22_3090.ps1
+```
+
+Preflight details are documented in:
+
+`reports/strategy_review/v2.2_check_report.md`
 
 ## Notes
 
