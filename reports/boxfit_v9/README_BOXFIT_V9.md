@@ -18,6 +18,10 @@ hunk line ranges.
 - `engine/rtv4/postprocessor.py`
   - optional `score_threshold`
   - optional class-aware `torchvision.ops.batched_nms`
+- `engine/solver/det_solver.py`
+  - AP50 custom mode refreshes EMA from the custom AP50 checkpoint at
+    `stop_epoch` when available.
+  - AP50 custom mode disables the later mAP-based rollback to `best_stg1.pth`.
 
 ## Added Config
 
@@ -47,3 +51,10 @@ bash tools/cotton/train_boxfit_v9_896.sh
 This route does not add more feature modules. It targets box fitting directly
 through matcher/loss/post-processing changes.
 
+## Patch Files Kept For Review
+
+- `boxfit_ap50_patch.diff`
+- `ap50_solver_refresh_fix.diff`
+
+Both downloaded diff files lacked valid git hunk line ranges, so their intended
+changes were applied manually and then checked in.

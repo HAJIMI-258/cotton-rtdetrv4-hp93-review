@@ -87,6 +87,7 @@ class DetSolver(BaseSolver):
         best_stat = {'epoch': -1, }
         best_v2_1 = {'epoch': -1, 'ap50': None, 'hard_class_mean_ap50': None}
         best_select_metric = getattr(args, 'best_select_metric', None)
+        custom_ap50_mode = best_select_metric in ('ap50_hard_tie', 'ap50_hard_tie_v2_2')
         hard_class_names = getattr(args, 'hard_class_names', [])
         hard_tie_threshold = float(getattr(args, 'hard_class_tie_threshold', 0.003))
         best_ap50_checkpoint_name = getattr(args, 'best_ap50_checkpoint_name', None) or 'best_v2_1.pth'
@@ -125,7 +126,16 @@ class DetSolver(BaseSolver):
                 self.train_dataloader.sampler.set_epoch(epoch)
 
             if epoch == self.train_dataloader.collate_fn.stop_epoch:
-                self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
+                refresh_path = self.output_dir / 'best_stg1.pth'
+                if custom_ap50_mode and self.output_dir:
+                    ap50_path = self.output_dir / best_ap50_checkpoint_name
+                    if ap50_path.exists():
+                        refresh_path = ap50_path
+                        print(
+                            f'Refresh EMA at epoch {epoch} from custom AP50 checkpoint: '
+                            f'{refresh_path.name}'
+                        )
+                self.load_resume_state(str(refresh_path))
                 self.ema.decay = self.train_dataloader.collate_fn.ema_restart_decay
                 print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
 
@@ -250,7 +260,7 @@ class DetSolver(BaseSolver):
                         top1 = max(test_stats[k][0], top1)
                         dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
 
-                elif epoch >= self.train_dataloader.collate_fn.stop_epoch:
+                elif epoch >= self.train_dataloader.collate_fn.stop_epoch and not custom_ap50_mode:
                     best_stat = {'epoch': -1, }
                     self.ema.decay -= 0.0001
                     self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
@@ -258,7 +268,7 @@ class DetSolver(BaseSolver):
 
             metric_improved = False
             if (
-                best_select_metric in ('ap50_hard_tie', 'ap50_hard_tie_v2_2')
+                custom_ap50_mode
                 and 'coco_eval_bbox' in test_stats
                 and len(test_stats['coco_eval_bbox']) > 1
             ):
