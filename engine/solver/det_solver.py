@@ -89,6 +89,14 @@ class DetSolver(BaseSolver):
         best_select_metric = getattr(args, 'best_select_metric', None)
         hard_class_names = getattr(args, 'hard_class_names', [])
         hard_tie_threshold = float(getattr(args, 'hard_class_tie_threshold', 0.003))
+        best_ap50_checkpoint_name = getattr(args, 'best_ap50_checkpoint_name', None) or 'best_v2_1.pth'
+        best_hardclass_checkpoint_name = getattr(args, 'best_hardclass_checkpoint_name', None)
+        best_meta_name = getattr(args, 'best_meta_name', None) or 'best_v2_1.json'
+        early_stopping_patience = getattr(args, 'early_stopping_patience', None)
+        early_stopping_patience = int(early_stopping_patience) if early_stopping_patience else None
+        epochs_since_metric_best = 0
+        should_stop_early = False
+        best_hardclass = {'epoch': -1, 'hard_class_mean_ap50': None, 'ap50': None}
         # evaluate again before resume training
         if self.last_epoch > 0:
             module = self.ema.module if self.ema else self.model
@@ -165,7 +173,7 @@ class DetSolver(BaseSolver):
                     if default_weight is not None:
                         new_weight = default_weight
                         reason = 'ema_phase_default'
-                else:
+                elif 'rho' in params and 'delta' in params:
                     rho = params['rho']
                     delta = params['delta']
                     lower_bound = rho - delta
@@ -183,6 +191,8 @@ class DetSolver(BaseSolver):
                                 new_weight = current_weight * ratio
                                 new_weight = min(max(new_weight, current_weight / 10.0), current_weight * 10.0)
                                 reason = f'adjusted_to_{target_percentage:.2f}%'
+                else:
+                    reason = 'foreground_params_only'
 
                 if abs(new_weight - current_weight) > 0:
                     self.criterion.weight_dict['loss_distill'] = new_weight
@@ -246,12 +256,15 @@ class DetSolver(BaseSolver):
                     self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
                     print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
 
+            metric_improved = False
             if (
-                best_select_metric == 'ap50_hard_tie'
+                best_select_metric in ('ap50_hard_tie', 'ap50_hard_tie_v2_2')
                 and 'coco_eval_bbox' in test_stats
                 and len(test_stats['coco_eval_bbox']) > 1
             ):
                 current_ap50 = float(test_stats['coco_eval_bbox'][1])
+                current_map = float(test_stats['coco_eval_bbox'][0])
+                current_ap75 = float(test_stats['coco_eval_bbox'][2])
                 if self._is_better_v2_1(
                     current_ap50,
                     hard_class_mean_ap50,
@@ -261,16 +274,55 @@ class DetSolver(BaseSolver):
                 ):
                     best_v2_1 = {
                         'epoch': epoch,
+                        'mAP': current_map,
                         'ap50': current_ap50,
+                        'ap75': current_ap75,
                         'hard_class_mean_ap50': hard_class_mean_ap50,
                         'per_class_ap50': per_class_ap50,
+                        'coco_eval_bbox': test_stats['coco_eval_bbox'],
                     }
                     if self.output_dir:
-                        dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_v2_1.pth')
+                        dist_utils.save_on_master(self.state_dict(), self.output_dir / best_ap50_checkpoint_name)
                         if dist_utils.is_main_process():
-                            with (self.output_dir / 'best_v2_1.json').open('w') as f:
+                            with (self.output_dir / best_meta_name).open('w') as f:
                                 json.dump(best_v2_1, f, indent=2, ensure_ascii=False)
-                    print(f"best_v2_1: {best_v2_1}")
+                    metric_improved = True
+                    print(f"best_custom_ap50: {best_v2_1}")
+
+                if (
+                    best_hardclass_checkpoint_name
+                    and hard_class_mean_ap50 is not None
+                    and (
+                        best_hardclass['hard_class_mean_ap50'] is None
+                        or hard_class_mean_ap50 > best_hardclass['hard_class_mean_ap50']
+                    )
+                ):
+                    best_hardclass = {
+                        'epoch': epoch,
+                        'mAP': current_map,
+                        'ap50': current_ap50,
+                        'ap75': current_ap75,
+                        'hard_class_mean_ap50': hard_class_mean_ap50,
+                        'per_class_ap50': per_class_ap50,
+                        'coco_eval_bbox': test_stats['coco_eval_bbox'],
+                    }
+                    if self.output_dir:
+                        dist_utils.save_on_master(self.state_dict(), self.output_dir / best_hardclass_checkpoint_name)
+                        if dist_utils.is_main_process():
+                            hard_meta_name = best_hardclass_checkpoint_name.rsplit('.', 1)[0] + '.json'
+                            with (self.output_dir / hard_meta_name).open('w') as f:
+                                json.dump(best_hardclass, f, indent=2, ensure_ascii=False)
+                    metric_improved = True
+                    print(f"best_hardclass: {best_hardclass}")
+
+            if early_stopping_patience is not None:
+                epochs_since_metric_best = 0 if metric_improved else epochs_since_metric_best + 1
+                if epochs_since_metric_best >= early_stopping_patience:
+                    print(
+                        f"Early stopping at epoch {epoch}: no custom metric improvement "
+                        f"for {epochs_since_metric_best} epochs."
+                    )
+                    should_stop_early = True
 
             log_stats = {
                 **{f'train_{k}': v for k, v in train_stats.items()},
@@ -295,6 +347,9 @@ class DetSolver(BaseSolver):
                         for name in filenames:
                             torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                     self.output_dir / "eval" / name)
+
+            if should_stop_early:
+                break
 
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))

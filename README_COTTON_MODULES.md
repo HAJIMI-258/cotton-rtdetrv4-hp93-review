@@ -6,54 +6,73 @@ This repository is a research working copy of RT-DETRv4 with cotton disease and 
 
 - `engine/rtv4/hybrid_encoder.py`
   - Prewitt-Franklin edge-guided enhancement
+  - 7x7 local edge refinement branch and edge consistency loss hook
+  - Small lesion cross-scale enhancement
   - CARAFE upsampling
   - BiFPN-style fusion
   - Coordinate Attention, ECA, CBAM, LSK
   - FasterNet partial convolution block
   - RepVGG enhancement block
   - Multi-scale gather-distribute context
-  - Frozen safe residual gates for stable from-scratch training
+  - Safe residual gates with configurable trainable/clamped scales
 - `engine/rtv4/rtv4_criterion.py`
   - NWD box loss
-  - More stable distillation loss handling
+  - Foreground-aware DINO feature distillation
+  - Optional positive class loss weights for hard classes
   - Auxiliary distillation skip logic
+- `engine/data/transforms/copy_paste.py`
+  - Conservative hard-class target-level copy-paste augmentation
+- `engine/solver/det_solver.py`
+  - Per-class AP50 extraction
+  - AP50 plus hard-class tie-break best checkpoint saving
 - `engine/core/yaml_config.py`
   - Teacher model construction support
-- `configs/cotton/rtv4_hgnetv2_s_cotton_teacher_paper_plus_all.yml`
-  - Main cotton all-module training config
+- `configs/cotton/rtv4_hgnetv2_m_cotton_balanced_v6_768.yml`
+  - Current improved v1/v6 21-class training config
+- `configs/cotton/rtv4_hgnetv2_m_cotton_improved_v2_1.yml`
+  - Hard-class copy-paste plus PF local refinement experiment
+- `configs/cotton/rtv4_hgnetv2_m_cotton_improved_v2_2_finetune.yml`
+  - Fine-tune recipe from current improved v1 AP50-best checkpoint
 
-## Validation Already Run
+## Current Training Context
 
-- Full module forward pass on CUDA.
-- Full module backward pass on CUDA with no NaN gradients.
-- Official `train.py` smoke test on a local RTX 4060 Laptop GPU:
-  - 100 training images
-  - 20 validation images
-  - 1 epoch
-  - AMP enabled
-  - all modules enabled
-  - NWD enabled
-  - completed without crash or NaN
+- Active cleaned balanced dataset uses `num_classes: 21`, not core9.
+- Current improved v1/v6 AP50-best checkpoint is produced by:
+  - `configs/cotton/rtv4_hgnetv2_m_cotton_balanced_v6_768.yml`
+  - `outputs/rtv4_hgnetv2_m_cotton_balanced_v6_768/best_ap50.pth`
+- Current reported improved v1 best:
+  - AP50: `0.9304486021`
+  - epoch: `44`
+- Baseline catch-up tracking is documented in:
+  - `reports/strategy_review/baseline_vs_improved_v6_strategy_snapshot.md`
+  - `reports/strategy_review/baseline_vs_improved_v6_epoch_compare.csv`
+
+## v2.2 Fine-Tune Intent
+
+`improved_v2_2_finetune` should not be treated as another all-module stack. It narrows the change to:
+
+- fine-tuning from improved v1 `best_ap50.pth`;
+- enabling/strengthening small lesion enhancement;
+- keeping PF local refinement and edge consistency;
+- tightening safe module scale to `0.005 -> max 0.02`;
+- using conservative hard-class copy-paste;
+- using AP50 with hard-class AP50 tie-break for checkpoint saving.
 
 ## Notes
 
 Dataset, pretrained weights, training outputs, and local machine paths are intentionally not committed.
 
-Before full training, set the dataset and teacher/pretrained paths in the cotton config:
+Before full training, set the dataset and teacher/pretrained paths in the cotton config if they differ from the 3090 machine:
 
 ```yaml
 train_dataloader:
   dataset:
-    img_folder: ./data/cotton_rtdetr_dataset/images/train
-    ann_file: ./data/cotton_coco_zero_based/annotations/instances_train.json
+    img_folder: ./data/cotton_rtdetr_dataset_balanced_stratified/images/train
+    ann_file: ./data/cotton_coco_balanced_stratified/annotations/instances_train.json
 ```
 
-For stability, the safe residual scale gates are frozen by default:
+The old S/all-module configs are retained for history, but should not be used as the current final comparison recipe. In the current v1/v6 and v2.2 configs, safe residual gates are trainable and clamped:
 
 ```yaml
-safe_module_init_scale: 0.001
-safe_module_trainable_scale: False
-safe_module_max_scale: 0.005
+safe_module_trainable_scale: True
 ```
-
-This avoids the gradient-clipping failure mode observed when the scale gates were trainable from scratch.

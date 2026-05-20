@@ -1,0 +1,10 @@
+# Snapshot alias for the current improved v1/v6 final training recipe.
+# The AP50-best checkpoint currently tracked from this recipe is:
+#   outputs/rtv4_hgnetv2_m_cotton_balanced_v6_768/best_ap50.pth
+#
+# This file intentionally includes the original config instead of duplicating it,
+# so future review can see the exact source recipe and diff v2.2 against it.
+
+__include__: [
+  'rtv4_hgnetv2_m_cotton_balanced_v6_768.yml'
+]

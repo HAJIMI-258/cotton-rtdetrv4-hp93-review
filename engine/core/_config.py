@@ -86,6 +86,10 @@ class BaseConfig(object):
         self.best_select_metric :str = None
         self.hard_class_names :List[str] = []
         self.hard_class_tie_threshold :float = 0.003
+        self.best_ap50_checkpoint_name :str = None
+        self.best_hardclass_checkpoint_name :str = None
+        self.best_meta_name :str = None
+        self.early_stopping_patience :int = None
 
         # distillation: General distillation control switch
         self._teacher_model: nn.Module = None

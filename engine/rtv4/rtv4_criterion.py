@@ -47,6 +47,7 @@ class RTv4Criterion(nn.Module):
                  nwd_eps=1e-7,
                  hdps_class_union=False,
                  distill_adaptive_params=None,
+                 class_loss_weights=None,
                  ):
         """Create the criterion.
         Parameters:
@@ -77,6 +78,23 @@ class RTv4Criterion(nn.Module):
         self.hdps_class_union = hdps_class_union
 
         self.distill_adaptive_params = distill_adaptive_params
+        class_weight_tensor = torch.ones(num_classes, dtype=torch.float32)
+        for class_id, weight in (class_loss_weights or {}).items():
+            try:
+                class_id = int(class_id)
+                weight = float(weight)
+            except (TypeError, ValueError):
+                _logger.warning("Ignore non-numeric class loss weight key: %s", class_id)
+                continue
+            if 0 <= class_id < num_classes:
+                class_weight_tensor[class_id] = weight
+            else:
+                _logger.warning(
+                    "Ignore class loss weight for id %s outside [0, %s).",
+                    class_id,
+                    num_classes,
+                )
+        self.register_buffer('class_loss_weight_tensor', class_weight_tensor, persistent=False)
 
     def normalized_gaussian_wasserstein_similarity(self, src_boxes, target_boxes):
         """NWD similarity for boxes represented as normalized cxcywh.
@@ -201,6 +219,20 @@ class RTv4Criterion(nn.Module):
         fixed_weight = self.weight_dict.get('loss_distill', 0.0)
         return fixed_weight
 
+    def _apply_positive_class_weights(self, loss, idx, target_classes_o):
+        """Apply optional per-class weights only on matched positive classes."""
+        if (
+            self.class_loss_weight_tensor is None
+            or target_classes_o.numel() == 0
+            or torch.all(self.class_loss_weight_tensor == 1)
+        ):
+            return loss
+
+        weights = self.class_loss_weight_tensor.to(device=loss.device, dtype=loss.dtype)
+        positive_weights = torch.ones_like(loss)
+        positive_weights[idx[0], idx[1], target_classes_o] = weights[target_classes_o]
+        return loss * positive_weights
+
     def loss_labels_focal(self, outputs, targets, indices, num_boxes):
         assert 'pred_logits' in outputs
         src_logits = outputs['pred_logits']
@@ -211,6 +243,7 @@ class RTv4Criterion(nn.Module):
         target_classes[idx] = target_classes_o
         target = F.one_hot(target_classes, num_classes=self.num_classes + 1)[..., :-1]
         loss = torchvision.ops.sigmoid_focal_loss(src_logits, target, self.alpha, self.gamma, reduction='none')
+        loss = self._apply_positive_class_weights(loss, idx, target_classes_o)
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
 
         return {'loss_focal': loss}
@@ -241,6 +274,7 @@ class RTv4Criterion(nn.Module):
         weight = self.alpha * pred_score.pow(self.gamma) * (1 - target) + target_score
 
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
+        loss = self._apply_positive_class_weights(loss, idx, target_classes_o)
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_vfl': loss}
 
@@ -275,6 +309,7 @@ class RTv4Criterion(nn.Module):
 
         # print(" ### DEIM-gamma{}-alpha{} ### ".format(self.gamma, self.mal_alpha))
         loss = F.binary_cross_entropy_with_logits(src_logits, target_score, weight=weight, reduction='none')
+        loss = self._apply_positive_class_weights(loss, idx, target_classes_o)
         loss = loss.mean(1).sum() * src_logits.shape[1] / num_boxes
         return {'loss_mal': loss}
 
