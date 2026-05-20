@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-Location $Repo
+$env:PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION = "python"
 
 & $Python -u train.py `
     -c configs\cotton\rtv4_hgnetv2_m_cotton_hp93_v22.yml `
