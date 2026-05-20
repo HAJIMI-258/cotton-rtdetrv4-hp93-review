@@ -26,5 +26,5 @@ Write-Host "Starting canonical hp93_v22 fine-tune from $Checkpoint"
 Write-Host "$Python $($Args -join ' ')"
 & $Python @Args 2>&1 | Tee-Object -FilePath $Log
 $ExitCode = $LASTEXITCODE
-Write-Host "python_exit=$ExitCode"
+"python_exit=$ExitCode" | Tee-Object -FilePath $Log -Append
 exit $ExitCode
