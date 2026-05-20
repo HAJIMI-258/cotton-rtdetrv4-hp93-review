@@ -48,6 +48,10 @@ class RTv4Criterion(nn.Module):
                  hdps_class_union=False,
                  distill_adaptive_params=None,
                  class_loss_weights=None,
+                 box_fit_alpha=2.0,
+                 ap50_iou_target=0.56,
+                 ap50_hinge_low=0.25,
+                 mpdiou_eps=1e-7,
                  ):
         """Create the criterion.
         Parameters:
@@ -76,6 +80,10 @@ class RTv4Criterion(nn.Module):
         self.nwd_normalizer = nwd_normalizer
         self.nwd_eps = nwd_eps
         self.hdps_class_union = hdps_class_union
+        self.box_fit_alpha = float(box_fit_alpha)
+        self.ap50_iou_target = float(ap50_iou_target)
+        self.ap50_hinge_low = float(ap50_hinge_low)
+        self.mpdiou_eps = float(mpdiou_eps)
 
         self.distill_adaptive_params = distill_adaptive_params
         class_weight_tensor = torch.ones(num_classes, dtype=torch.float32)
@@ -330,6 +338,49 @@ class RTv4Criterion(nn.Module):
             box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
         loss_giou = loss_giou if boxes_weight is None else loss_giou * boxes_weight
         losses['loss_giou'] = loss_giou.sum() / num_boxes
+
+        need_boxfit = any(
+            key in self.weight_dict
+            for key in ('loss_mpdiou', 'loss_alpha_iou', 'loss_ap50_margin')
+        )
+        if need_boxfit:
+            src_xyxy = box_cxcywh_to_xyxy(src_boxes)
+            target_xyxy = box_cxcywh_to_xyxy(target_boxes)
+            iou = torch.diag(box_iou(src_xyxy, target_xyxy)[0]).clamp(min=0.0, max=1.0)
+
+            if 'loss_mpdiou' in self.weight_dict:
+                enc_x1 = torch.minimum(src_xyxy[:, 0], target_xyxy[:, 0])
+                enc_y1 = torch.minimum(src_xyxy[:, 1], target_xyxy[:, 1])
+                enc_x2 = torch.maximum(src_xyxy[:, 2], target_xyxy[:, 2])
+                enc_y2 = torch.maximum(src_xyxy[:, 3], target_xyxy[:, 3])
+                enc_diag = (enc_x2 - enc_x1).pow(2) + (enc_y2 - enc_y1).pow(2)
+                enc_diag = enc_diag.clamp_min(self.mpdiou_eps)
+
+                top_left_dist = (
+                    (src_xyxy[:, 0] - target_xyxy[:, 0]).pow(2)
+                    + (src_xyxy[:, 1] - target_xyxy[:, 1]).pow(2)
+                )
+                bottom_right_dist = (
+                    (src_xyxy[:, 2] - target_xyxy[:, 2]).pow(2)
+                    + (src_xyxy[:, 3] - target_xyxy[:, 3]).pow(2)
+                )
+                mpdiou = iou - (top_left_dist + bottom_right_dist) / enc_diag
+                losses['loss_mpdiou'] = (1.0 - mpdiou).sum() / num_boxes
+
+            if 'loss_alpha_iou' in self.weight_dict:
+                alpha = max(self.box_fit_alpha, self.mpdiou_eps)
+                losses['loss_alpha_iou'] = (1.0 - iou.pow(alpha)).sum() / num_boxes
+
+            if 'loss_ap50_margin' in self.weight_dict:
+                target_iou = max(0.50, self.ap50_iou_target)
+                band = (
+                    (iou.detach() >= self.ap50_hinge_low)
+                    & (iou.detach() < target_iou)
+                ).to(iou.dtype)
+                margin = F.relu(target_iou - iou)
+                denom = band.sum().clamp_min(1.0)
+                losses['loss_ap50_margin'] = (margin * band).sum() / denom
+
         if 'loss_nwd' in self.weight_dict:
             nwd = self.normalized_gaussian_wasserstein_similarity(src_boxes, target_boxes)
             nwd = torch.nan_to_num(nwd, nan=0.0, posinf=0.0, neginf=0.0)

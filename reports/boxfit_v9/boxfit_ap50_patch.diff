@@ -1,0 +1,109 @@
+diff --git a/engine/rtv4/rtv4_criterion.py b/engine/rtv4/rtv4_criterion.py
+--- a/engine/rtv4/rtv4_criterion.py
++++ b/engine/rtv4/rtv4_criterion.py
+@@
+                  nwd_normalizer=1.0,
+                  nwd_eps=1e-7,
+                  hdps_class_union=False,
+                  distill_adaptive_params=None,
+                  class_loss_weights=None,
++                 box_fit_alpha=2.0,
++                 ap50_iou_target=0.56,
++                 ap50_hinge_low=0.25,
++                 mpdiou_eps=1e-7,
+                  ):
+@@
+         self.nwd_eps = nwd_eps
+         self.hdps_class_union = hdps_class_union
++        self.box_fit_alpha = float(box_fit_alpha)
++        self.ap50_iou_target = float(ap50_iou_target)
++        self.ap50_hinge_low = float(ap50_hinge_low)
++        self.mpdiou_eps = float(mpdiou_eps)
+
+         self.distill_adaptive_params = distill_adaptive_params
+@@
+     def loss_boxes(self, outputs, targets, indices, num_boxes, boxes_weight=None):
+@@
+         loss_giou = 1 - torch.diag(generalized_box_iou( \
+             box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
+         loss_giou = loss_giou if boxes_weight is None else loss_giou * boxes_weight
+         losses['loss_giou'] = loss_giou.sum() / num_boxes
++
++        # AP50-oriented box fitting losses.
++        # These are intentionally placed in the same matched-box path as L1/GIoU
++        # so they also affect auxiliary decoder outputs through the existing code.
++        need_boxfit = any(
++            key in self.weight_dict
++            for key in ('loss_mpdiou', 'loss_alpha_iou', 'loss_ap50_margin')
++        )
++        if need_boxfit:
++            src_xyxy = box_cxcywh_to_xyxy(src_boxes)
++            tgt_xyxy = box_cxcywh_to_xyxy(target_boxes)
++            iou = torch.diag(box_iou(src_xyxy, tgt_xyxy)[0]).clamp(min=0.0, max=1.0)
++
++            if 'loss_mpdiou' in self.weight_dict:
++                enc_x1 = torch.minimum(src_xyxy[:, 0], tgt_xyxy[:, 0])
++                enc_y1 = torch.minimum(src_xyxy[:, 1], tgt_xyxy[:, 1])
++                enc_x2 = torch.maximum(src_xyxy[:, 2], tgt_xyxy[:, 2])
++                enc_y2 = torch.maximum(src_xyxy[:, 3], tgt_xyxy[:, 3])
++                enc_diag = (enc_x2 - enc_x1).pow(2) + (enc_y2 - enc_y1).pow(2)
++                enc_diag = enc_diag.clamp_min(self.mpdiou_eps)
++
++                tl_dist = (src_xyxy[:, 0] - tgt_xyxy[:, 0]).pow(2) + (src_xyxy[:, 1] - tgt_xyxy[:, 1]).pow(2)
++                br_dist = (src_xyxy[:, 2] - tgt_xyxy[:, 2]).pow(2) + (src_xyxy[:, 3] - tgt_xyxy[:, 3]).pow(2)
++                mpdiou = iou - (tl_dist + br_dist) / enc_diag
++                losses['loss_mpdiou'] = (1.0 - mpdiou).sum() / num_boxes
++
++            if 'loss_alpha_iou' in self.weight_dict:
++                alpha = max(self.box_fit_alpha, self.mpdiou_eps)
++                losses['loss_alpha_iou'] = (1.0 - iou.pow(alpha)).sum() / num_boxes
++
++            if 'loss_ap50_margin' in self.weight_dict:
++                # Direct AP50 surrogate: only matched boxes in the borderline band
++                # receive this extra pressure, preventing already-good boxes from
++                # dominating the gradient and pushing sub-0.5 boxes over the AP50 line.
++                target_iou = max(0.50, self.ap50_iou_target)
++                band = ((iou.detach() >= self.ap50_hinge_low) & (iou.detach() < target_iou)).to(iou.dtype)
++                margin = F.relu(target_iou - iou)
++                denom = band.sum().clamp_min(1.0)
++                losses['loss_ap50_margin'] = (margin * band).sum() / denom
++
+         if 'loss_nwd' in self.weight_dict:
+             nwd = self.normalized_gaussian_wasserstein_similarity(src_boxes, target_boxes)
+             nwd = torch.nan_to_num(nwd, nan=0.0, posinf=0.0, neginf=0.0)
+             losses['loss_nwd'] = (1.0 - nwd).sum() / num_boxes
+
+         return losses
+diff --git a/engine/rtv4/postprocessor.py b/engine/rtv4/postprocessor.py
+--- a/engine/rtv4/postprocessor.py
++++ b/engine/rtv4/postprocessor.py
+@@
+         num_classes=80,
+         use_focal_loss=True,
+         num_top_queries=300,
+-        remap_mscoco_category=False
++        remap_mscoco_category=False,
++        nms_iou_threshold=None,
++        score_threshold=0.0,
+     ) -> None:
+@@
+         self.num_top_queries = num_top_queries
+         self.num_classes = int(num_classes)
+         self.remap_mscoco_category = remap_mscoco_category
++        self.nms_iou_threshold = nms_iou_threshold
++        self.score_threshold = float(score_threshold)
+         self.deploy_mode = False
+@@
+         results = []
+         for lab, box, sco in zip(labels, boxes, scores):
++            if self.score_threshold > 0:
++                keep = sco >= self.score_threshold
++                lab, box, sco = lab[keep], box[keep], sco[keep]
++            if self.nms_iou_threshold is not None and float(self.nms_iou_threshold) > 0 and box.numel() > 0:
++                keep = torchvision.ops.batched_nms(
++                    box, sco, lab, float(self.nms_iou_threshold)
++                )
++                keep = keep[:self.num_top_queries]
++                lab, box, sco = lab[keep], box[keep], sco[keep]
+             result = dict(labels=lab, boxes=box, scores=sco)
+             results.append(result)

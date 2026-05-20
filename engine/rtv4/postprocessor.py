@@ -26,7 +26,9 @@ class PostProcessor(nn.Module):
         'num_classes',
         'use_focal_loss',
         'num_top_queries',
-        'remap_mscoco_category'
+        'remap_mscoco_category',
+        'nms_iou_threshold',
+        'score_threshold',
     ]
 
     def __init__(
@@ -34,17 +36,24 @@ class PostProcessor(nn.Module):
         num_classes=80,
         use_focal_loss=True,
         num_top_queries=300,
-        remap_mscoco_category=False
+        remap_mscoco_category=False,
+        nms_iou_threshold=None,
+        score_threshold=0.0,
     ) -> None:
         super().__init__()
         self.use_focal_loss = use_focal_loss
         self.num_top_queries = num_top_queries
         self.num_classes = int(num_classes)
         self.remap_mscoco_category = remap_mscoco_category
+        self.nms_iou_threshold = nms_iou_threshold
+        self.score_threshold = float(score_threshold)
         self.deploy_mode = False
 
     def extra_repr(self) -> str:
-        return f'use_focal_loss={self.use_focal_loss}, num_classes={self.num_classes}, num_top_queries={self.num_top_queries}'
+        return (
+            f'use_focal_loss={self.use_focal_loss}, num_classes={self.num_classes}, '
+            f'num_top_queries={self.num_top_queries}, nms_iou_threshold={self.nms_iou_threshold}'
+        )
 
     # def forward(self, outputs, orig_target_sizes):
     def forward(self, outputs, orig_target_sizes: torch.Tensor):
@@ -83,6 +92,19 @@ class PostProcessor(nn.Module):
 
         results = []
         for lab, box, sco in zip(labels, boxes, scores):
+            if self.score_threshold > 0:
+                keep = sco >= self.score_threshold
+                lab, box, sco = lab[keep], box[keep], sco[keep]
+            if (
+                self.nms_iou_threshold is not None
+                and float(self.nms_iou_threshold) > 0
+                and box.numel() > 0
+            ):
+                keep = torchvision.ops.batched_nms(
+                    box, sco, lab, float(self.nms_iou_threshold)
+                )
+                keep = keep[:self.num_top_queries]
+                lab, box, sco = lab[keep], box[keep], sco[keep]
             result = dict(labels=lab, boxes=box, scores=sco)
             results.append(result)
 
