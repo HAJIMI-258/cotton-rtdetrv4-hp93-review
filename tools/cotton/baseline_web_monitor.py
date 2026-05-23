@@ -9,6 +9,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 EPOCH_RE = re.compile(r"Epoch:\s*\[(\d+)\]\s*\[(\d+)\s*/\s*(\d+)\].*?eta:\s*([^\s]+).*?lr:\s*([0-9.eE+-]+).*?loss:\s*([0-9.]+)\s*\(([0-9.]+)\)")
+PROCESS_MATCH = "balanced_clean_baseline"
 
 HTML_PAGE = '''<!doctype html>
 <html lang="zh-CN">
@@ -114,7 +115,9 @@ def gpu_info():
 
 def is_running():
     try:
-        p=subprocess.run(['powershell','-NoProfile','-Command',"Get-CimInstance Win32_Process | ? {$_.CommandLine -like '*balanced_clean_baseline*' -and $_.CommandLine -like '*train.py*'} | Select -First 1 -ExpandProperty ProcessId"], capture_output=True, text=True, timeout=8)
+        pattern = PROCESS_MATCH.replace("'", "''")
+        ps = "$m='" + pattern + "'; Get-CimInstance Win32_Process | ? {$_.CommandLine -like '*train.py*' -and $_.CommandLine -like ('*'+$m+'*')} | Select -First 1 -ExpandProperty ProcessId"
+        p=subprocess.run(['powershell','-NoProfile','-Command',ps], capture_output=True, text=True, timeout=8)
         return bool((p.stdout or '').strip())
     except Exception:
         return False
@@ -157,12 +160,18 @@ class Handler(BaseHTTPRequestHandler):
         return {'now': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'running': is_running(), 'total_epochs': self.total_epochs, 'log_age_sec': age, 'current': parse_current(stdout_tail), 'metrics': metrics[-30:], 'latest_metric': latest, 'best_ap50': best, 'gpu': gpu_info(), 'stdout_tail': stdout_tail[-18000:], 'json_tail': log_tail[-12000:]}
 
 def main():
+    global HTML_PAGE, PROCESS_MATCH
     ap=argparse.ArgumentParser()
     ap.add_argument('--host', default='0.0.0.0')
     ap.add_argument('--port', type=int, default=18080)
     ap.add_argument('--output', required=True)
     ap.add_argument('--epochs', type=int, default=120)
+    ap.add_argument('--title', default='Cotton RT-DETRv4 基线监控')
+    ap.add_argument('--match', default='balanced_clean_baseline')
     args=ap.parse_args()
+    PROCESS_MATCH = args.match
+    HTML_PAGE = HTML_PAGE.replace('<title>Cotton Baseline Monitor</title>', f'<title>{args.title}</title>')
+    HTML_PAGE = HTML_PAGE.replace('Cotton RT-DETRv4 基线监控', args.title)
     Handler.output_dir=args.output
     Handler.total_epochs=args.epochs
     httpd=ThreadingHTTPServer((args.host,args.port), Handler)
