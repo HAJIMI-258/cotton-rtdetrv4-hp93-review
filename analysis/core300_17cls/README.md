@@ -82,8 +82,23 @@ One sampling caveat is intentional and recorded in the report: `open_cotton_boll
 
 ## Training
 
+Improved/stable route:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/cotton/train_core300_17cls.ps1
+```
+
+Clean baseline route:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/cotton/train_core300_17cls_baseline.ps1
+```
+
+Configs:
+
+```text
+configs/cotton/rtv4_hgnetv2_m_cotton_core300_17cls.yml
+configs/cotton/rtv4_hgnetv2_m_cotton_core300_17cls_baseline.yml
 ```
 
 ## Evaluation
