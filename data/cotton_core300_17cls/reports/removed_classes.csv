@@ -1,0 +1,5 @@
+﻿class_name,original_train_instances,removed_reason
+red_cotton_bug,154,original train_instances < 300
+army_worm,218,original train_instances < 300
+powdery_mildew,143,original train_instances < 300
+boll_rot,213,original train_instances < 300
