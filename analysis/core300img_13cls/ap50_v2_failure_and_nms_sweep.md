@@ -16,7 +16,7 @@ multi-scale flip TTA and weighted boxes fusion.
 | AP50 v2 / BoxFit, cloud | epoch 27 | 0.8387 | 0.9307 | 0.8343 | 0.1423 | 0.4531 | 0.8484 |
 | AP50 v2 / BoxFit, 3090 | epoch 94 latest | 0.8425 | 0.9223 | 0.8469 | 0.1459 | 0.4991 | 0.8511 |
 | baseline + NMS 0.85 | epoch 100 checkpoint | about 0.880 | about 0.957 | about 0.891 | about 0.151 | about 0.542 | about 0.889 |
-| baseline + 640/768/896 H/V flip WBF | stg2 checkpoint | 0.8762 | 0.9701 | 0.8907 | 0.1556 | 0.6404 | 0.8888 |
+| baseline + 640/768/896 H/V flip consensus-WBF | stg2 checkpoint | 0.8762 | 0.9702 | 0.8907 | 0.1557 | 0.6408 | 0.8888 |
 
 ## Why AP50 v2 Got Worse
 

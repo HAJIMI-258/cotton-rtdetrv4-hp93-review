@@ -67,7 +67,18 @@ def filter_and_merge(boxes, scores, labels, score_thr, nms_thr, max_det, class_s
     return dict(boxes=boxes[keep], scores=scores[keep], labels=labels[keep])
 
 
-def weighted_boxes_fusion(boxes, scores, labels, score_thr, iou_thr, max_det, class_score_thr=None, class_iou_thr=None):
+def weighted_boxes_fusion(
+    boxes,
+    scores,
+    labels,
+    score_thr,
+    iou_thr,
+    max_det,
+    class_score_thr=None,
+    class_iou_thr=None,
+    score_mode="max",
+    expected_views=1,
+):
     if boxes.numel() == 0:
         return dict(boxes=boxes, scores=scores, labels=labels)
 
@@ -96,7 +107,16 @@ def weighted_boxes_fusion(boxes, scores, labels, score_thr, iou_thr, max_det, cl
             cs = cls_scores[cluster]
             weights = cs.clamp_min(1e-6).unsqueeze(1)
             fused_boxes.append((cb * weights).sum(dim=0) / weights.sum())
-            fused_scores.append(cs.max())
+            if score_mode == "mean":
+                fused_score = cs.mean()
+            elif score_mode == "avgmax":
+                fused_score = 0.5 * (cs.max() + cs.mean())
+            elif score_mode == "consensus":
+                view_factor = min(float(cs.numel()), float(expected_views)) / max(float(expected_views), 1.0)
+                fused_score = cs.max() * (0.5 + 0.5 * view_factor)
+            else:
+                fused_score = cs.max()
+            fused_scores.append(fused_score)
             fused_labels.append(cls)
             remain = ~cluster
             cls_boxes = cls_boxes[remain]
@@ -167,6 +187,8 @@ def evaluate_tta(
     sizes,
     pre_fuse_topk,
     use_vflip=False,
+    wbf_score_mode="max",
+    wbf_expected_views=1,
     class_score_thr=None,
     class_iou_thr=None,
 ):
@@ -246,7 +268,16 @@ def evaluate_tta(
 
             if fuse_mode == "wbf":
                 out = weighted_boxes_fusion(
-                    boxes, scores, labels, score_thr, nms_thr, max_det, class_score_thr, class_iou_thr
+                    boxes,
+                    scores,
+                    labels,
+                    score_thr,
+                    nms_thr,
+                    max_det,
+                    class_score_thr,
+                    class_iou_thr,
+                    wbf_score_mode,
+                    wbf_expected_views,
                 )
             else:
                 out = filter_and_merge(
@@ -277,6 +308,8 @@ def main():
     parser.add_argument("--fuse-mode", choices=["nms", "wbf"], default="nms")
     parser.add_argument("--sizes", type=int, nargs="+", default=[768])
     parser.add_argument("--pre-fuse-topk", type=int, default=900)
+    parser.add_argument("--wbf-score-mode", choices=["max", "mean", "avgmax", "consensus"], default="max")
+    parser.add_argument("--wbf-expected-views", type=int, default=1)
     parser.add_argument("--class-score", action="append", default=[])
     parser.add_argument("--class-iou", action="append", default=[])
     args = parser.parse_args()
@@ -323,6 +356,8 @@ def main():
                 sizes=args.sizes,
                 pre_fuse_topk=args.pre_fuse_topk,
                 use_vflip=args.vflip,
+                wbf_score_mode=args.wbf_score_mode,
+                wbf_expected_views=args.wbf_expected_views,
                 class_score_thr=class_score_thr,
                 class_iou_thr=class_iou_thr,
             )
@@ -334,6 +369,8 @@ def main():
                 "checkpoints": len(args.resume),
                 "sizes": "+".join(str(x) for x in args.sizes),
                 "pre_fuse_topk": args.pre_fuse_topk,
+                "wbf_score_mode": args.wbf_score_mode,
+                "wbf_expected_views": args.wbf_expected_views,
                 "score": score,
                 "iou": nms,
                 "class_score": json.dumps(class_score_thr, sort_keys=True),

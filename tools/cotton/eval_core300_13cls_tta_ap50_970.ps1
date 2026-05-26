@@ -18,5 +18,8 @@ Set-Location $Repo
   --sizes 640 768 896 `
   --fuse-mode wbf `
   --pre-fuse-topk 700 `
+  --wbf-score-mode consensus `
+  --wbf-expected-views 12 `
   --score 0.005 `
-  --nms 0.45
+  --nms 0.45 `
+  --class-score "open_cotton_boll=0.02"

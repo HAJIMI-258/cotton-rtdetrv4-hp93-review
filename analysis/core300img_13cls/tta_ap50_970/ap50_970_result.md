@@ -14,21 +14,23 @@ Inference strategy:
 - horizontal flip + vertical flip TTA
 - weighted boxes fusion
 - pre-fuse top-k: `700`
+- WBF score mode: `consensus`, expected views: `12`
 - score threshold: `0.005`
+- `open_cotton_boll` score threshold: `0.02`
 - WBF IoU threshold: `0.45`
 
 Metrics:
 
 | metric | value |
 |---|---:|
-| AP50 | 0.970076 |
-| mAP50:95 | 0.876169 |
-| AP75 | 0.890674 |
-| APS | 0.155639 |
-| APM | 0.640396 |
-| APL | 0.888775 |
+| AP50 | 0.970207 |
+| mAP50:95 | 0.876233 |
+| AP75 | 0.890689 |
+| APS | 0.155738 |
+| APM | 0.640794 |
+| APL | 0.888779 |
 
-Compared with the saved plain baseline checkpoint result `AP50=0.953041`, the AP50-oriented inference route improves AP50 by about `+0.0170`.
+Compared with the saved plain baseline checkpoint result `AP50=0.953041`, the AP50-oriented inference route improves AP50 by about `+0.0172`.
 
 ## Per-class AP50
 
@@ -45,7 +47,7 @@ Compared with the saved plain baseline checkpoint result `AP50=0.953041`, the AP
 | leaf_variegation | 1.000000 |
 | leaf_reddening | 0.985651 |
 | herbicide_growth_damage | 1.000000 |
-| open_cotton_boll | 0.897086 |
+| open_cotton_boll | 0.898300 |
 | healthy | 0.992904 |
 
 ## Reproduce
@@ -67,8 +69,11 @@ D:\miniconda3\envs\cotton\python.exe -u tools\cotton\eval_tta_ap50.py `
   --sizes 640 768 896 `
   --fuse-mode wbf `
   --pre-fuse-topk 700 `
+  --wbf-score-mode consensus `
+  --wbf-expected-views 12 `
   --score 0.005 `
-  --nms 0.45
+  --nms 0.45 `
+  --class-score "open_cotton_boll=0.02"
 ```
 
 ## Note

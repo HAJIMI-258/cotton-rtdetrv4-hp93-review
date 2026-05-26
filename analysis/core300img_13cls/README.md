@@ -85,9 +85,9 @@ powershell -ExecutionPolicy Bypass -File tools/cotton/eval_core300_13cls_tta_ap5
 
 Verified result on the 13-class task:
 
-- AP50: `0.970076`
-- mAP50:95: `0.876169`
-- AP75: `0.890674`
+- AP50: `0.970207`
+- mAP50:95: `0.876233`
+- AP75: `0.890689`
 
 Detailed output is in `analysis/core300img_13cls/tta_ap50_970/`.
 
