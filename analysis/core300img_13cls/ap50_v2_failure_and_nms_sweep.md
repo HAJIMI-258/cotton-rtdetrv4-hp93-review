@@ -17,6 +17,8 @@ multi-scale flip TTA and weighted boxes fusion.
 | AP50 v2 / BoxFit, 3090 | epoch 94 latest | 0.8425 | 0.9223 | 0.8469 | 0.1459 | 0.4991 | 0.8511 |
 | baseline + NMS 0.85 | epoch 100 checkpoint | about 0.880 | about 0.957 | about 0.891 | about 0.151 | about 0.542 | about 0.889 |
 | baseline + 640/768/896 H/V flip consensus-WBF | stg2 checkpoint | 0.8762 | 0.9702 | 0.8907 | 0.1557 | 0.6408 | 0.8888 |
+| train300 improved + NMS/box-voting | best_stg2 checkpoint | 0.881 | 0.960 | 0.891 | 0.150 | 0.607 | 0.891 |
+| train300 improved + 640/768/896 H/V flip consensus-WBF | best_stg2 checkpoint | 0.8811 | 0.9676 | 0.8869 | 0.1600 | 0.5744 | 0.8946 |
 
 ## Why AP50 v2 Got Worse
 
@@ -51,6 +53,25 @@ The best AP50-oriented inference command is:
 ```text
 powershell -ExecutionPolicy Bypass -File tools\cotton\eval_core300_13cls_tta_ap50_970.ps1
 ```
+
+## 2026-06-01 Output-Layer Refinement Check
+
+The code now includes optional class-aware NMS plus same-class box voting inside
+`engine/rtv4/postprocessor.py`. Test-only verification on the WYZ 3090 machine
+with `outputs\rtv4_hgnetv2_m_cotton_core300img_13cls_train300\best_stg2.pth`
+showed:
+
+| variant | mAP50:95 | AP50 | AP75 | APS | APM | APL |
+|---|---:|---:|---:|---:|---:|---:|
+| raw output | 0.881 | 0.955 | 0.891 | 0.148 | 0.603 | 0.892 |
+| score=0.001, NMS=0.80 | 0.882 | 0.958 | 0.893 | 0.151 | 0.607 | 0.893 |
+| score=0.001, NMS=0.82, box-vote=0.70 | 0.881 | 0.960 | 0.891 | 0.150 | 0.607 | 0.891 |
+| multi-scale H/V flip consensus-WBF | 0.8811 | 0.9676 | 0.8869 | 0.1600 | 0.5744 | 0.8946 |
+
+Conclusion: box voting gives a real but limited AP50 gain. The only route that
+currently opens a larger AP50 gap is the multi-scale consistency/WBF inference
+module. It should be presented as an output decision refinement module, not as a
+new backbone training module.
 
 ## Next Step
 
