@@ -111,7 +111,7 @@ optimizer:
     - {params: '.*(?:prewitt_franklin_scale|small_lesion_scale|carafe_scales|bifpn_top_down_scales|bifpn_bottom_up_scales|output_refine_scales|coordinate_attention_exact_scales|eca_attention_scales).*', lr: 0.00005, weight_decay: 0.}
     - {params: '^(?=.*backbone)(?!.*norm|bn).*$', lr: 0.000006}
     - {params: '^(?=.*backbone)(?=.*norm|bn).*$', lr: 0.000006, weight_decay: 0.}
-    - {params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.}
+    - {params: '^(?!.*(?:enc_score_head|dec_score_head|denoising_class_embed))(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.}
   lr: 0.000035
   betas: [0.9, 0.999]
   weight_decay: 0.0001
