@@ -1,0 +1,120 @@
+__include__: ['rtv4_hgnetv2_m_cotton_balanced_v6_768.yml']
+
+# v7_weakcls_ft_768
+# Fine-tune the 21-class v6 AP50-best checkpoint. This is model-training optimization,
+# not TTA/WBF or output-only postprocess.
+# Launch:
+#   python -u train.py -c configs/cotton/rtv4_hgnetv2_m_cotton_v7_weakcls_ft_768.yml -t outputs/rtv4_hgnetv2_m_cotton_balanced_v6_768/best_ap50.pth -d cuda --seed 0 --use-amp
+
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_v7_weakcls_ft_768
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_v7_weakcls_ft_768/tensorboard
+num_classes: 21
+remap_mscoco_category: False
+best_select_metric: ap50
+best_ap50_checkpoint_name: best_ap50_v7_weakcls_ft.pth
+best_meta_name: best_ap50_v7_weakcls_ft.json
+early_stopping_patience: 14
+
+HGNetv2:
+  return_idx: [1, 2, 3]
+
+HybridEncoder:
+  # Keep v6 3-level detector; avoid failed P2/all-module routes.
+  prewitt_franklin_enhance: True
+  prewitt_franklin_alpha: 0.10
+  prewitt_franklin_local_refine: True
+  prewitt_franklin_local_kernel_size: 7
+  prewitt_franklin_edge_consistency: False
+  small_lesion_enhance: True
+  small_lesion_alpha: 0.12
+  output_refine: True
+  output_refine_alpha: 0.06
+  carafe_upsample: True
+  carafe_compressed_channels: 32
+  carafe_kernel_size: 3
+  bifpn_fusion: True
+  coord_attention_exact: True
+  coordinate_attention_alpha: 0.06
+  eca_attention: True
+  eca_alpha: 0.04
+  cbam_attention: False
+  lsk_attention: False
+  fasternet_pconv: False
+  repvgg_enhance: False
+  gather_distribute: False
+  safe_module_init_scale: 0.008
+  safe_module_trainable_scale: True
+  safe_module_max_scale: 0.05
+
+accumulation_steps: 2
+epoches: 36
+flat_epoch: 8
+no_aug_epoch: 10
+warmup_iter: 300
+checkpoint_freq: 1
+print_freq: 50
+use_amp: True
+use_ema: True
+sync_bn: False
+find_unused_parameters: False
+clip_max_norm: 0.1
+
+optimizer:
+  type: AdamW
+  params:
+    - {params: '.*(?:enc_score_head|dec_score_head|denoising_class_embed).*', lr: 0.00008, weight_decay: 0.}
+    - {params: '.*(?:prewitt_franklin_scale|small_lesion_scale|carafe_scales|bifpn_top_down_scales|bifpn_bottom_up_scales|output_refine_scales|coordinate_attention_exact_scales|eca_attention_scales).*', lr: 0.00005, weight_decay: 0.}
+    - {params: '^(?=.*backbone)(?!.*norm|bn).*$', lr: 0.000006}
+    - {params: '^(?=.*backbone)(?=.*norm|bn).*$', lr: 0.000006, weight_decay: 0.}
+    - {params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.}
+  lr: 0.000035
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+RTv4Criterion:
+  # No BoxFit/AP50-margin/MPDIoU/Alpha-IoU; previous runs showed those hurt.
+  weight_dict: {loss_mal: 1.15, loss_bbox: 4.0, loss_giou: 1.6, loss_nwd: 0.18, loss_fgl: 0.10, loss_ddf: 1.0, loss_distill: 0.8}
+  losses: ['mal', 'boxes', 'local', 'distill']
+  gamma: 1.5
+  reg_max: 32
+  nwd_normalizer: 1.0
+  nwd_eps: 1.0e-7
+  hdps_class_union: False
+  # Weak-class positive reweighting: aphid, mealy_bug, red_bug, bollworms,
+  # army_worm, thrips, whitefly, powdery_mildew, boll_rot.
+  class_loss_weights: {0: 1.18, 1: 1.25, 2: 1.18, 4: 1.12, 5: 1.22, 6: 1.10, 7: 1.10, 8: 1.35, 14: 1.18, 18: 1.12}
+  distill_adaptive_params:
+    enabled: True
+    foreground_focus: True
+    fg_weight: 1.0
+    bg_weight: 0.015
+    box_scale: 1.8
+    min_fg_pixels: 4
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {cost_class: 2.6, cost_bbox: 4.0, cost_giou: 1.6}
+    alpha: 0.25
+    gamma: 2.0
+
+train_dataloader:
+  dataset:
+    transforms:
+      ops:
+        - {type: RandomPhotometricDistort, p: 0.12}
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.12}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [768, 768]}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        name: stop_epoch
+        epoch: [0, 18, 26]
+        ops: ['RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
+      mosaic_prob: 0.0
+  collate_fn:
+    mixup_prob: 0.0
+    mixup_epochs: [0, 0]
+    stop_epoch: 100000
