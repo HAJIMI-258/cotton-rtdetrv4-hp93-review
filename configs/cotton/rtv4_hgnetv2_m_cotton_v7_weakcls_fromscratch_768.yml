@@ -1,0 +1,86 @@
+__include__: ['rtv4_hgnetv2_m_cotton_balanced_v6_768.yml']
+
+# v7_weakcls_fromscratch_768
+# Strict from-scratch route. No -t checkpoint. Compare against v6 from-scratch.
+
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_v7_weakcls_fromscratch_768
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_v7_weakcls_fromscratch_768/tensorboard
+num_classes: 21
+remap_mscoco_category: False
+best_select_metric: ap50
+best_ap50_checkpoint_name: best_ap50_v7_weakcls_fromscratch.pth
+best_meta_name: best_ap50_v7_weakcls_fromscratch.json
+
+HGNetv2:
+  name: 'B2'
+  return_idx: [1, 2, 3]
+  freeze_at: -1
+  freeze_norm: False
+  use_lab: True
+  pretrained: True
+  local_model_dir: ./pretrain/hgnetv2/
+
+HybridEncoder:
+  in_channels: [384, 768, 1536]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  depth_mult: 0.67
+  expansion: 0.5
+  use_encoder_idx: [2]
+  num_encoder_layers: 1
+  distill_teacher_dim: 768
+  ifpn_upsample_mode: bilinear
+  prewitt_franklin_enhance: True
+  prewitt_franklin_alpha: 0.10
+  prewitt_franklin_local_refine: True
+  prewitt_franklin_local_kernel_size: 7
+  prewitt_franklin_edge_consistency: False
+  small_lesion_enhance: True
+  small_lesion_alpha: 0.12
+  output_refine: True
+  output_refine_alpha: 0.06
+  carafe_upsample: True
+  carafe_compressed_channels: 32
+  carafe_kernel_size: 3
+  bifpn_fusion: True
+  coord_attention_exact: True
+  coordinate_attention_alpha: 0.06
+  eca_attention: True
+  eca_alpha: 0.04
+  cbam_attention: False
+  lsk_attention: False
+  fasternet_pconv: False
+  repvgg_enhance: False
+  gather_distribute: False
+  safe_module_init_scale: 0.010
+  safe_module_trainable_scale: True
+  safe_module_max_scale: 0.06
+
+RTv4Criterion:
+  weight_dict: {loss_mal: 1.15, loss_bbox: 4.0, loss_giou: 1.6, loss_nwd: 0.18, loss_fgl: 0.10, loss_ddf: 1.0, loss_distill: 1.0}
+  losses: ['mal', 'boxes', 'local', 'distill']
+  gamma: 1.5
+  reg_max: 32
+  nwd_normalizer: 1.0
+  nwd_eps: 1.0e-7
+  hdps_class_union: False
+  class_loss_weights: {0: 1.18, 1: 1.25, 2: 1.18, 4: 1.12, 5: 1.22, 6: 1.10, 7: 1.10, 8: 1.35, 14: 1.18, 18: 1.12}
+  distill_adaptive_params:
+    enabled: True
+    foreground_focus: True
+    fg_weight: 1.0
+    bg_weight: 0.015
+    box_scale: 1.8
+    min_fg_pixels: 4
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {cost_class: 2.6, cost_bbox: 4.0, cost_giou: 1.6}
+    alpha: 0.25
+    gamma: 2.0
+
+epoches: 120
+flat_epoch: 70
+no_aug_epoch: 30
+checkpoint_freq: 1
+use_amp: True
+use_ema: True
