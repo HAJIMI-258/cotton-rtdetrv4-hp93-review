@@ -4,12 +4,24 @@ __include__: ['rtv4_hgnetv2_m_cotton_balanced_v6_768.yml']
 # Clean from-scratch test: keep v6 architecture, v6 modules, v6 schedule, v6 data.
 # The only intended model-training change is conservative positive-class reweighting.
 # No P2, no BoxFit/AP50-margin, no extra module combo.
+# Use ap50_hard_tie because DetSolver custom AP50 saving only recognizes
+# ap50_hard_tie / ap50_hard_tie_v2_2, not plain 'ap50'.
 
 output_dir: ./outputs/rtv4_hgnetv2_m_cotton_v8_weakcls_only_fromscratch_768
 summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_v8_weakcls_only_fromscratch_768/tensorboard
-best_select_metric: ap50
+best_select_metric: ap50_hard_tie
+hard_class_names: []
+hard_class_tie_threshold: 0.0
 best_ap50_checkpoint_name: best_ap50_v8_weakcls_only_fromscratch.pth
 best_meta_name: best_ap50_v8_weakcls_only_fromscratch.json
+early_stopping_patience: 9999
+
+epoches: 120
+flat_epoch: 70
+no_aug_epoch: 30
+checkpoint_freq: 1
+use_amp: True
+use_ema: True
 
 RTv4Criterion:
   # Keep v6 loss weights and matcher through include; add only weak-class positive weights.
