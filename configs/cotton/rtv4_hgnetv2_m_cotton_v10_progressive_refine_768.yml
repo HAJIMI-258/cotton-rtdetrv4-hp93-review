@@ -1,0 +1,28 @@
+__include__: ['rtv4_hgnetv2_m_cotton_v7_weakcls_ft_768.yml']
+
+# v10_progressive_refine_768
+# Stage-2 config for progressive training:
+#   Stage 1: train the stable v6 detector from scratch.
+#   Stage 2: fine-tune v6 best with weak-class/lesion-aware refinement.
+# This is a training-time model refinement route, not TTA/WBF/NMS postprocess.
+
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_v10_progressive_refine_768
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_v10_progressive_refine_768/tensorboard
+
+best_select_metric: ap50_hard_tie
+hard_class_names: []
+hard_class_tie_threshold: 0.0
+best_ap50_checkpoint_name: best_ap50_v10_progressive_refine.pth
+best_meta_name: best_ap50_v10_progressive_refine.json
+early_stopping_patience: 9999
+
+# Stage-2 only. Start with -t from the v6 best checkpoint.
+epoches: 36
+flat_epoch: 8
+no_aug_epoch: 10
+warmup_iter: 300
+checkpoint_freq: 1
+use_amp: True
+use_ema: True
+
+# Keep the v7 fine-tune module set, but make the AP50 saving contract valid.
