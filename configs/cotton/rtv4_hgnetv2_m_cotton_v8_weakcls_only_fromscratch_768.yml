@@ -1,0 +1,49 @@
+__include__: ['rtv4_hgnetv2_m_cotton_balanced_v6_768.yml']
+
+# v8_weakcls_only_fromscratch_768
+# Clean from-scratch test: keep v6 architecture, v6 modules, v6 schedule, v6 data.
+# The only intended model-training change is conservative positive-class reweighting.
+# No P2, no BoxFit/AP50-margin, no extra module combo.
+# Use ap50_hard_tie because DetSolver custom AP50 saving only recognizes
+# ap50_hard_tie / ap50_hard_tie_v2_2, not plain 'ap50'.
+
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_v8_weakcls_only_fromscratch_768
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_v8_weakcls_only_fromscratch_768/tensorboard
+best_select_metric: ap50_hard_tie
+hard_class_names: []
+hard_class_tie_threshold: 0.0
+best_ap50_checkpoint_name: best_ap50_v8_weakcls_only_fromscratch.pth
+best_meta_name: best_ap50_v8_weakcls_only_fromscratch.json
+early_stopping_patience: 9999
+
+epoches: 120
+flat_epoch: 70
+no_aug_epoch: 30
+checkpoint_freq: 1
+use_amp: True
+use_ema: True
+
+RTv4Criterion:
+  # Keep v6 loss weights and matcher through include; add only weak-class positive weights.
+  weight_dict: {loss_mal: 1.1, loss_bbox: 4, loss_giou: 1.5, loss_nwd: 0.25, loss_fgl: 0.10, loss_ddf: 1.0, loss_distill: 1.5}
+  losses: ['mal', 'boxes', 'local', 'distill']
+  gamma: 1.5
+  reg_max: 32
+  nwd_normalizer: 1.0
+  nwd_eps: 1.0e-7
+  hdps_class_union: False
+  # Conservative positive-class weights only. They are applied inside focal/VFL/MAL on matched positives.
+  # 0 cotton_aphid, 1 mealy_bug, 2 red_cotton_bug, 5 pink_bollworm, 8 whitefly, 14 powdery_mildew
+  class_loss_weights: {0: 1.10, 1: 1.15, 2: 1.10, 5: 1.12, 8: 1.20, 14: 1.10}
+  distill_adaptive_params:
+    enabled: True
+    foreground_focus: True
+    fg_weight: 2.0
+    bg_weight: 0.01
+    box_scale: 2.2
+    min_fg_pixels: 6
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {cost_class: 2.5, cost_bbox: 4, cost_giou: 1.5}
+    alpha: 0.25
+    gamma: 2.0

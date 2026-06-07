@@ -1,0 +1,16 @@
+__include__: [
+  './rtv4_hgnetv2_m_cotton_core300img_13cls_train300_purebaseline.yml'
+]
+
+# Test-time model output refinement for the core300img 13-class route.
+# It keeps the trained detector unchanged and replaces raw top-k output with:
+# low-score filtering -> class-aware NMS -> same-class box voting.
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_core300img_13cls_train300_ap50_nmsvote
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_core300img_13cls_train300_ap50_nmsvote/tensorboard
+
+PostProcessor:
+  num_top_queries: 300
+  score_threshold: 0.001
+  nms_iou_threshold: 0.85
+  box_voting_iou_threshold: 0.72
+  box_voting_score_power: 1.0

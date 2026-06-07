@@ -1,0 +1,69 @@
+__include__: ['rtv4_hgnetv2_m_cotton_balanced_v6_768.yml']
+
+# v11_mixema_b2_fromscratch_768
+# B2 fallback for the article-inspired MixStructure/EMA route.
+# Use this only if B3 pretrained weights are missing or B3 is too slow/OOM.
+
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_v11_mixema_b2_fromscratch_768
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_v11_mixema_b2_fromscratch_768/tensorboard
+best_select_metric: ap50_hard_tie
+hard_class_names: []
+hard_class_tie_threshold: 0.0
+best_ap50_checkpoint_name: best_ap50_v11_mixema_b2_fromscratch.pth
+best_meta_name: best_ap50_v11_mixema_b2_fromscratch.json
+early_stopping_patience: 9999
+
+HybridEncoder:
+  # Article-inspired minimal transfer: MixStructure-like + EMA-like modules only.
+  carafe_upsample: False
+  bifpn_fusion: False
+  gather_distribute: False
+  output_refine: False
+  edge_enhance: False
+  prewitt_franklin_enhance: False
+  small_lesion_enhance: True
+  small_lesion_alpha: 0.10
+  high_frequency_enhance: True
+  high_frequency_alpha: 0.06
+  attention_enhance: True
+  attention_alpha: 0.08
+  coord_attention_exact: True
+  coordinate_attention_alpha: 0.05
+  eca_attention: True
+  eca_alpha: 0.04
+  cbam_attention: False
+  lsk_attention: False
+  fasternet_pconv: False
+  repvgg_enhance: False
+  safe_module_init_scale: 0.006
+  safe_module_trainable_scale: True
+  safe_module_max_scale: 0.04
+
+RTv4Criterion:
+  # Keep losses close to v6. Do not add weak-class weighting in this clean test.
+  weight_dict: {loss_mal: 1.1, loss_bbox: 4.0, loss_giou: 1.6, loss_nwd: 0.20, loss_fgl: 0.10, loss_ddf: 1.0, loss_distill: 1.2}
+  losses: ['mal', 'boxes', 'local', 'distill']
+  gamma: 1.5
+  reg_max: 32
+  nwd_normalizer: 1.0
+  nwd_eps: 1.0e-7
+  hdps_class_union: False
+  distill_adaptive_params:
+    enabled: True
+    foreground_focus: True
+    fg_weight: 1.5
+    bg_weight: 0.015
+    box_scale: 2.0
+    min_fg_pixels: 4
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {cost_class: 2.4, cost_bbox: 4.0, cost_giou: 1.6}
+    alpha: 0.25
+    gamma: 2.0
+
+epoches: 120
+flat_epoch: 70
+no_aug_epoch: 30
+checkpoint_freq: 1
+use_amp: True
+use_ema: True

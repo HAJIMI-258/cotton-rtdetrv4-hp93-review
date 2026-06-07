@@ -1,0 +1,213 @@
+__include__: ['rtv4_hgnetv2_m_cotton_balanced_v6_768.yml']
+
+# v11_mixema_b3_fromscratch_768
+# Article-inspired from-scratch route for paper-grade comparison.
+# Core idea from the provided YOLOv11 marine-debris article:
+#   1) MixStructure-style multi-scale texture/context extraction.
+#   2) EMA-style efficient spatial-channel attention before prediction.
+# Translation to RT-DETRv4:
+#   - Use HGNetv2-B3 to increase backbone representation capacity.
+#   - Use SmallLesionCrossScaleEnhance + HighFrequencyResidualEnhance as the
+#     MixStructure-like multi-scale/local-texture block.
+#   - Use EfficientChannelSpatialAttention + CoordAttention + ECA as the
+#     EMA-like lightweight spatial-channel calibration on fused features.
+# This is a from-scratch run. Do not use -t checkpoint.
+
+output_dir: ./outputs/rtv4_hgnetv2_m_cotton_v11_mixema_b3_fromscratch_768
+summary_dir: ./outputs/rtv4_hgnetv2_m_cotton_v11_mixema_b3_fromscratch_768/tensorboard
+
+num_classes: 21
+remap_mscoco_category: False
+best_select_metric: ap50_hard_tie
+hard_class_names: []
+hard_class_tie_threshold: 0.0
+best_ap50_checkpoint_name: best_ap50_v11_mixema_b3_fromscratch.pth
+best_meta_name: best_ap50_v11_mixema_b3_fromscratch.json
+early_stopping_patience: 9999
+
+HGNetv2:
+  name: 'B3'
+  return_idx: [1, 2, 3]
+  freeze_at: -1
+  freeze_norm: False
+  use_lab: True
+  pretrained: True
+  local_model_dir: ./pretrain/hgnetv2/
+
+HybridEncoder:
+  in_channels: [512, 1024, 2048]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  depth_mult: 0.67
+  expansion: 0.5
+  use_encoder_idx: [2]
+  num_encoder_layers: 1
+  nhead: 8
+  dim_feedforward: 1024
+  dropout: 0.
+  enc_act: 'gelu'
+  act: 'silu'
+  distill_teacher_dim: 768
+
+  # Keep fusion simple. v9 showed CARAFE/BiFPN alone is not enough, and full stacking hurts.
+  ifpn_upsample_mode: bilinear
+  carafe_upsample: False
+  bifpn_fusion: False
+  weighted_fusion: False
+  gather_distribute: False
+  output_refine: False
+
+  # MixStructure-like block: multi-scale local texture + high-frequency residual.
+  edge_enhance: False
+  prewitt_franklin_enhance: False
+  small_lesion_enhance: True
+  small_lesion_alpha: 0.10
+  high_frequency_enhance: True
+  high_frequency_alpha: 0.06
+
+  # EMA-like lightweight spatial-channel calibration.
+  attention_enhance: True
+  attention_alpha: 0.08
+  coord_attention_exact: True
+  coordinate_attention_alpha: 0.05
+  eca_attention: True
+  eca_alpha: 0.04
+
+  # Explicitly keep heavier/unstable attention blocks off.
+  coordinate_attention: False
+  cbam_attention: False
+  lsk_attention: False
+  fasternet_pconv: False
+  repvgg_enhance: False
+  background_suppression: False
+  global_context: False
+
+  safe_module_init_scale: 0.006
+  safe_module_trainable_scale: True
+  safe_module_max_scale: 0.04
+
+DFINETransformer:
+  feat_channels: [256, 256, 256]
+  feat_strides: [8, 16, 32]
+  hidden_dim: 256
+  num_levels: 3
+  num_layers: 4
+  eval_idx: -1
+  num_queries: 300
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  reg_max: 32
+  reg_scale: 4
+  layer_scale: 1
+  num_points: [3, 6, 3]
+  cross_attn_method: default
+  query_select_method: default
+  activation: silu
+  mlp_act: silu
+
+PostProcessor:
+  num_top_queries: 300
+
+# B3 has higher memory cost than B2. Keep effective batch 16 via accumulation.
+accumulation_steps: 4
+epoches: 140
+flat_epoch: 80
+no_aug_epoch: 35
+checkpoint_freq: 1
+print_freq: 50
+use_amp: True
+use_ema: True
+sync_bn: False
+find_unused_parameters: False
+clip_max_norm: 0.1
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*norm|bn).*$'
+      lr: 0.00002
+    -
+      params: '^(?=.*backbone)(?=.*norm|bn).*$'
+      lr: 0.00002
+      weight_decay: 0.
+    -
+      params: '.*(?:small_lesion_scale|high_frequency_scale|attention_scale|coordinate_attention_exact_scales|eca_attention_scales).*'
+      lr: 0.00010
+      weight_decay: 0.
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bn|bias)).*$'
+      weight_decay: 0.
+  lr: 0.00012
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+RTv4Criterion:
+  # Keep losses close to v6. Do not mix in weak-class weighting or BoxFit here.
+  weight_dict: {loss_mal: 1.1, loss_bbox: 4.0, loss_giou: 1.6, loss_nwd: 0.20, loss_fgl: 0.10, loss_ddf: 1.0, loss_distill: 1.2}
+  losses: ['mal', 'boxes', 'local', 'distill']
+  gamma: 1.5
+  reg_max: 32
+  nwd_normalizer: 1.0
+  nwd_eps: 1.0e-7
+  hdps_class_union: False
+  distill_adaptive_params:
+    enabled: True
+    foreground_focus: True
+    fg_weight: 1.5
+    bg_weight: 0.015
+    box_scale: 2.0
+    min_fg_pixels: 4
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {cost_class: 2.4, cost_bbox: 4.0, cost_giou: 1.6}
+    alpha: 0.25
+    gamma: 2.0
+
+train_dataloader:
+  dataset:
+    img_folder: ./data/cotton_rtdetr_dataset_balanced_stratified/images/train
+    ann_file: ./data/cotton_coco_balanced_stratified/annotations/instances_train.json
+    transforms:
+      ops:
+        - {type: Mosaic, output_size: 384, rotation_range: 8, translation_range: [0.08, 0.08], scaling_range: [0.6, 1.4], probability: 1.0, fill_value: 0, use_cache: False, max_cached_images: 50, random_pop: True}
+        - {type: RandomPhotometricDistort, p: 0.25}
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.25}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [768, 768]}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        name: stop_epoch
+        epoch: [4, 26, 42]
+        ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
+      mosaic_prob: 0.25
+  shuffle: True
+  total_batch_size: 4
+  num_workers: 4
+  drop_last: True
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 768
+    base_size_repeat: 3
+    mixup_prob: 0.08
+    mixup_epochs: [4, 26]
+    stop_epoch: 42
+    ema_restart_decay: 0.9998
+
+val_dataloader:
+  dataset:
+    img_folder: ./data/cotton_rtdetr_dataset_balanced_stratified/images/val
+    ann_file: ./data/cotton_coco_balanced_stratified/annotations/instances_val.json
+    transforms:
+      ops:
+        - {type: Resize, size: [768, 768]}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+  shuffle: False
+  total_batch_size: 8
+  num_workers: 4
+  drop_last: False
